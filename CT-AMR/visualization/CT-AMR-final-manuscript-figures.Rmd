@@ -1,0 +1,519 @@
+---
+title: "CT-AMR final manuscript figures"
+output: html_notebook
+---
+
+1.  [**Core-genome tree with rplV substitutions as a heatmap**]{.underline}
+
+```{r}
+library(ape)
+library(ggtree)
+library(tidytree)
+library(phytools)
+library(treeio)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+
+coretree <- read.tree("~/Desktop/CT-AMR/core_alignment.fasta.varsites.phy.treefile")
+coretree <- root(coretree, outgroup = "L2_ref")
+metadata <- read_excel("~/Desktop/CT-AMR/metadata2.xlsx")
+
+# Ensure metadata has proper column names and types
+colnames(metadata)[1] <- "label"  # Rename first column to 'label'
+# Example: Split pirate_mutations into individual mutations columns (one-hot encoding)
+
+library(dplyr)
+library(tidyr)
+metadata_mutations <- metadata %>%
+  mutate(
+    # Replace NA with empty string to avoid problems
+    pirate_mutations = ifelse(is.na(pirate_mutations), "", pirate_mutations)
+  ) %>%
+  # Separate mutations into multiple rows
+  separate_rows(pirate_mutations, sep = ";\\s*") %>%
+  filter(pirate_mutations != "") %>%
+  mutate(pirate_mutations = trimws(pirate_mutations)) %>%
+  distinct(label, pirate_mutations)  # remove duplicates if any
+
+# Now metadata_mutations has rows like:
+# label           pirate_mutations
+# 1040_wgs_batch2  G52S
+# 1040_wgs_batch2  R65C
+# 1040_wgs_batch2  V77A
+# ...
+
+#metadata_mutations
+
+all_mutations <- unique(metadata_mutations$pirate_mutations)
+
+# Create binary matrix: 1 if the mutation exists for the label (tip), 0 otherwise
+mutation_matrix <- metadata_mutations %>%
+  mutate(present = 1) %>%
+  pivot_wider(names_from = pirate_mutations, values_from = present, values_fill = 0)
+
+mutation_matrix_long <- mutation_matrix %>%
+  pivot_longer(
+    cols = -label, 
+    names_to = "mutation", 
+    values_to = "present"
+  ) %>%
+  filter(present == 1) %>%
+  group_by(label) %>%
+  mutate(xpos = match(mutation, all_mutations)) %>%
+  ungroup()
+
+
+p <- ggtree(coretree, layout = "rectangular", size = 0.1) %<+% metadata + 
+  geom_tippoint(aes(color = lineage), shape = 16, size = 0.5) +  # circular tip points
+  guides(color = guide_legend(override.aes = list(shape = 15, size = 2))) +  # square in legend
+  theme_tree2() +
+  theme(
+    legend.key.height = unit(0.3, "lines")  # Reduce this value for tighter spacing
+  )
+
+p2 <- facet_plot(
+  p,
+  panel = "Substitutions in rplV",
+  data = mutation_matrix_long,
+  geom = geom_tile,
+  mapping = aes(x = xpos, fill = mutation),
+  width = 0.8, height = 1
+) +
+  scale_fill_manual(
+    values = setNames(scales::hue_pal()(length(all_mutations)), all_mutations),
+    name = "Mutations"
+  ) +
+  scale_x_continuous(breaks = seq_along(all_mutations), labels = all_mutations) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8, size= 5), legend.position = "right"  ) +
+  # Tweak panel label height and axis text
+  theme(
+    strip.text.y = element_text(size = 3),      # smaller panel label text
+    strip.placement = "outside",
+    #strip.background = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 0.8),
+    panel.spacing = unit(0.5, "lines"),          # smaller spacing between tree and heatmap
+    legend.text = element_text(size = 4),
+    legend.spacing.y = unit(0.1, "cm"),
+    legend.title = element_text(size = 5)
+  ) 
+
+p2
+
+```
+
+2.  [**Time-scale phylogenetic tree using dated isolates.**]{.underline}
+
+tree is created first using iqtree using the following command
+
+''iqtree -s dated_alignment.fasta --date meta.tsv''
+
+Then the resulting treefile is used as input for BEAST loosely based on the instructions in this tutorial:using the instructions form this tutorial - <file:///Users/parulsharma/Downloads/DivergenceDatingTutorialv2.2.0.pdf>
+
+Different models were tried with the following parameters. All yielding loosely consistent results:
+
+| Model block | Clock model | Population model | Substitution model |
+|-------------|-------------|------------------|--------------------|
+
+|                    |                        |                  |                        |
+|-----------------|-------------------|-----------------|-------------------|
+| ct_dated_beast.log | Strict molecular clock | Bayesian Skyline | GTR + Γ (4 categories) |
+
+|                           |                        |                  |                        |
+|--------------------|------------------|-----------------|------------------|
+| ct_strict_model_beast.log | Strict molecular clock | Bayesian Skyline | HKY + Γ (4 categories) |
+
+|                           |                        |                    |                        |
+|--------------------|------------------|------------------|------------------|
+| ct_strict_model_dates.log | Strict molecular clock | Exponential growth | GTR + Γ (4 categories) |
+
+|                  |                        |               |                        |
+|-----------------|--------------------|-----------------|--------------------|
+| constant-pop.log | Strict molecular clock | Constant size | GTR + Γ (4 categories) |
+
+|                       |                        |                           |                                           |
+|----------------|----------------|----------------|------------------------|
+| extended_bayesian.log | Strict molecular clock | Extended Bayesian Skyline | GTR + Γ (4 categories, + invariant sites) |
+
+|     |     |     |     |
+|-----|-----|-----|-----|
+|     |     |     |     |
+
+```{r}
+library(ggplot2)
+library(ggtree)
+library(readxl)
+library(treeio)
+library(ips) #for read.beast
+
+# Set option to ignore negative branches
+#options(ignore.negative.edge = TRUE)
+
+# Load metadata
+metadata <- read_excel("~/Desktop/CT-AMR/metadata2.xlsx")
+
+# Read BEAST tree
+beast_tree2 <- read.beast("~/Desktop/ct-beast/ct_strict_model_dated.mcc.tree")
+
+# Plot with a proper mrsd value
+ggtree(beast_tree2, mrsd = as.Date("2019-01-01")) %<+% metadata + 
+  theme_tree2()  + scale_x_ggtree() +
+  geom_tippoint(aes(color = pirate_mutations), shape = 16, size = 2, na.rm = TRUE) +  # circular tip points
+  guides(color = guide_legend(override.aes = list(shape = 15, size = 4)))   # square in legend
+
+```
+
+Now let's try to identify range - using HPD.
+
+```{r}
+#library(ggtree)
+# Read BEAST tree
+library(treeio)
+beast_tree2 <- treeio::read.beast("~/Desktop/ct-beast/ct_strict_model_dated.mcc.tree")
+
+ p <- ggtree(beast_tree2, mrsd = as.Date("2019-01-01")) + 
+  geom_range(range='height_0.95_HPD', color='blue', alpha=.3, size=1.5, branch.length="height") + theme_tree2() +
+   geom_tippoint(aes(color = pirate_mutations), shape = 16, size = 1, na.rm = TRUE)
+
+ p %<+% metadata + theme_tree2()  + 
+  guides(color = guide_legend(override.aes = list(shape = 16, size = 4)))   # round boxes in legend 
+ 
+
+ 
+```
+
+3.  [**Substitutions in rplD and 23S genes**]{.underline}
+
+    ```{r}
+    library(ape)
+    library(ggtree)
+    library(tidytree)
+    library(phytools)
+    library(treeio)
+    library(dplyr)
+    library(readxl)
+    library(stringr)
+    library(tidyr)
+    library(ggplot2)
+
+    # ✅ Load tree and metadata
+    coretree <- read.tree("~/Desktop/CT-AMR/core_alignment.fasta.varsites.phy.treefile")
+    # ✅ Root the tree
+    coretree <- root(coretree, outgroup = "L2_ref")
+    metadata <- read_excel("~/Desktop/CT-AMR/metadata2.xlsx")
+    mut_metadata <- read_excel("~/Desktop/CT-AMR/23S/mutations_per_sample.xlsx")
+
+    # Ensure metadata has proper column names and types
+    colnames(mut_metadata)[1] <- "label"  # Rename first column to 'label'
+
+    # Split Mutations into individual mutations columns (one-hot encoding)
+    metadata_mutations <- mut_metadata %>%
+      mutate(
+        # Replace NA with empty string to avoid problems
+        Mutations = ifelse(is.na(Mutations), "", Mutations)
+      ) %>%
+      # Separate mutations into multiple rows
+      separate_rows(Mutations, sep = ";\\s*") %>%
+      filter(Mutations != "") %>%
+      mutate(Mutations = trimws(Mutations)) %>%
+      distinct(label, Mutations)  # remove duplicates if any
+
+    all_mutations <- unique(mut_metadata$Mutations)
+
+    # --- Step 1: Count mutation frequencies
+    top_mutations <- metadata_mutations %>%
+      count(Mutations, sort = TRUE) %>%
+      top_n(15, n) %>%
+      pull(Mutations)
+
+    # Create binary matrix: 1 if the mutation exists for the label (tip), 0 otherwise
+    mutation_matrix <- metadata_mutations %>%
+      mutate(present = 1) %>%
+      pivot_wider(names_from = Mutations, values_from = present, values_fill = 0)
+
+    mutation_matrix_long <- mutation_matrix %>%
+      pivot_longer(
+        cols = -label, 
+        names_to = "mutation", 
+        values_to = "present"
+      ) %>%
+      filter(present == 1) %>%
+      group_by(label) %>%
+      mutate(xpos = match(mutation, all_mutations)) %>%
+      ungroup()
+
+    # --- Step 2: Filter mutation_matrix_long to only top mutations
+    mutation_matrix_long_top <- mutation_matrix_long %>%
+      filter(mutation %in% top_mutations) %>%
+      mutate(xpos = match(mutation, top_mutations))  # reset xpos order to top mutations only
+
+    p <- ggtree(coretree, layout = "rectangular", size = 0.1) %<+% metadata + 
+      geom_tippoint(aes(color = lineage), shape = 16, size = 0.5) +  # circular tip points
+      guides(color = guide_legend(override.aes = list(shape = 15, size = 2))) +  # square in legend
+      theme_tree2() +
+      theme(
+        legend.key.height = unit(0.3, "lines")  # Reduce this value for tighter spacing
+      )
+
+    # --- Step 3: Update plotting
+    p2 <- facet_plot(
+      p,
+      panel = "23S rRNA",
+      data = mutation_matrix_long_top,
+      geom = geom_tile,
+      mapping = aes(x = xpos, fill = mutation),
+      width = 0.8
+    ) +
+      scale_fill_manual(
+        values = setNames(scales::hue_pal()(length(top_mutations)), top_mutations),
+        name = "Mutations"
+      ) +
+      scale_x_continuous(breaks = seq_along(top_mutations), labels = top_mutations) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 0.8, size = 5),
+        legend.position = "NONE",
+        strip.text.y = element_text(size = 3),
+        panel.spacing = unit(0.5, "lines"),
+        legend.text = element_text(size = 4),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.title = element_text(size = 5)
+      )
+
+    ```
+
+    ```{r}
+    p2
+    ```
+
+    ```{r}
+    library(ape)
+    library(ggtree)
+    library(tidytree)
+    library(phytools)
+    library(treeio)
+    library(dplyr)
+    library(readxl)
+    library(stringr)
+    library(tidyr)
+
+    # ✅ Load tree and metadata
+    coretree <- read.tree("~/Desktop/CT-AMR/core_alignment.fasta.varsites.phy.treefile")
+    # ✅ Root the tree
+    coretree <- root(coretree, outgroup = "L2_ref")
+    metadata <- read_excel("~/Desktop/CT-AMR/metadata2.xlsx")
+    mut_metadata <- read_excel("~/Desktop/CT-AMR/23S/mutations_per_sample.xlsx")
+
+    # Ensure metadata has proper column names and types
+    colnames(mut_metadata)[1] <- "label"  # Rename first column to 'label'
+
+    # Split Mutations into individual mutations columns (one-hot encoding)
+    metadata_mutations <- mut_metadata %>%
+      mutate(
+        # Replace NA with empty string to avoid problems
+        Mutations = ifelse(is.na(Mutations), "", Mutations)
+      ) %>%
+      # Separate mutations into multiple rows
+      separate_rows(Mutations, sep = ";\\s*") %>%
+      filter(Mutations != "") %>%
+      mutate(Mutations = trimws(Mutations)) %>%
+      distinct(label, Mutations)  # remove duplicates if any
+
+    all_mutations <- unique(mut_metadata$Mutations)
+
+    # --- Step 1: Count mutation frequencies
+    top_mutations <- metadata_mutations %>%
+      count(Mutations, sort = TRUE) %>%
+      top_n(15, n) %>%
+      pull(Mutations)
+
+    # Create binary matrix: 1 if the mutation exists for the label (tip), 0 otherwise
+    mutation_matrix <- metadata_mutations %>%
+      mutate(present = 1) %>%
+      pivot_wider(names_from = Mutations, values_from = present, values_fill = 0)
+
+    mutation_matrix_long <- mutation_matrix %>%
+      pivot_longer(
+        cols = -label, 
+        names_to = "mutation", 
+        values_to = "present"
+      ) %>%
+      filter(present == 1) %>%
+      group_by(label) %>%
+      mutate(xpos = match(mutation, all_mutations)) %>%
+      ungroup()
+
+    # --- Step 2: Filter mutation_matrix_long to only top mutations
+    mutation_matrix_long_top <- mutation_matrix_long %>%
+      filter(mutation %in% top_mutations) %>%
+      mutate(xpos = match(mutation, top_mutations))  # reset xpos order to top mutations only
+
+    p <- ggtree(coretree, layout = "rectangular", size = 0.1) %<+% metadata + 
+      geom_tippoint(aes(color = lineage), shape = 16, size = 0.5) +  # circular tip points
+      guides(color = guide_legend(override.aes = list(shape = 15, size = 2))) +  # square in legend
+      theme_tree2() +
+      theme(
+        legend.key.height = unit(0.3, "lines")  # Reduce this value for tighter spacing
+      )
+
+    # --- Step 3: Update plotting
+    p2 <- facet_plot(
+      p,
+      panel = "23S rRNA",
+      data = mutation_matrix_long_top,
+      geom = geom_tile,
+      mapping = aes(x = xpos, fill = mutation),
+      width = 0.8
+    ) +
+      scale_fill_manual(
+        values = setNames(scales::hue_pal()(length(top_mutations)), top_mutations),
+        name = "Mutations"
+      ) +
+      scale_x_continuous(breaks = seq_along(top_mutations), labels = top_mutations) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 0.8, size = 5),
+        legend.position = "NONE",
+        strip.text.y = element_text(size = 3),
+        panel.spacing = unit(0.5, "lines"),
+        legend.text = element_text(size = 4),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.title = element_text(size = 5)
+      )
+
+    # Ensure metadata has proper column names and types
+    colnames(metadata)[1] <- "label"  # Rename first column to 'label'
+    metadata$rplDMutations <- as.factor(metadata$rplDMutations)
+
+    #Split pirate_mutations into individual mutations columns (one-hot encoding)
+    metadata_mutations_rplD <- metadata %>%
+      mutate(
+        # Ensure rplDMutations is character, replace NA with empty string
+        rplDMutations = as.character(rplDMutations),
+        rplDMutations = ifelse(is.na(rplDMutations), "", rplDMutations)
+      ) %>%
+      # Split multiple mutations into rows (assuming they're separated by ";")
+      separate_rows(rplDMutations, sep = ";\\s*") %>%
+      # Clean up
+      filter(rplDMutations != "") %>%
+      mutate(rplDMutations = str_trim(rplDMutations)) %>%
+      distinct(label, rplDMutations)  # Remove duplicates
+
+    all_mutations_rplD <- unique(metadata_mutations_rplD$rplDMutations)
+    # Update unique mutation list for plotting (excluding C194Y)
+    all_mutations_rplD <- setdiff(all_mutations_rplD, "C194Y")
+
+    # Create binary matrix: 1 if the mutation exists for the label (tip), 0 otherwise
+    mutation_matrix_rplD <- metadata_mutations_rplD %>%
+      mutate(present = 1) %>%
+      pivot_wider(names_from = rplDMutations, values_from = present, values_fill = 0)
+
+    mutation_matrix_long_rplD <- mutation_matrix_rplD %>%
+      pivot_longer(
+        cols = -label, 
+        names_to = "mutation", 
+        values_to = "present"
+      ) %>%
+      filter(present == 1) %>%
+      filter(mutation != "C194Y") %>%   # 🚨 remove the ubiquitous mutation!!! 
+      group_by(label) %>%
+      mutate(xpos = match(mutation, all_mutations_rplD)) %>%
+      ungroup()
+
+    ###For color palettes
+    palette_23S <- setNames(scales::hue_pal()(length(top_mutations)), top_mutations)
+    palette_rplD <- setNames(scales::hue_pal()(length(all_mutations_rplD)), all_mutations_rplD)
+    all_palettes <- c(palette_23S, palette_rplD)
+
+
+    p3 <- facet_plot(
+      p2,
+      panel = "rplD",
+      data = mutation_matrix_long_rplD,
+      geom = geom_tile,
+      mapping = aes(x = xpos, fill = mutation),
+      width = 0.8
+    ) +
+      scale_fill_manual(
+        values = setNames(scales::hue_pal()(length(all_mutations_rplD)), all_mutations_rplD),
+        name = "rplV Mutations"
+      ) +
+      scale_x_continuous(breaks = seq_along(all_mutations_rplD), labels = all_mutations_rplD) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 0.8, size= 5), legend.position = 
+           "right" ) +
+      # Tweak panel label height and axis text
+      theme(
+        strip.text.y = element_text(size = 3),      # smaller panel label text
+        strip.placement = "outside",
+        #strip.background = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 0.8),
+        panel.spacing = unit(0.5, "lines"),          # smaller spacing between tree and heatmap
+        legend.text = element_text(size = 4),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.title = element_text(size = 5)
+      ) 
+
+    ```
+
+    ```{r}
+    p3
+    ```
+
+4.  Recombination hotspots
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readxl)
+
+# Read Excel file
+df <- read_excel("~/Downloads/core_alignment_recomb_hotspots.xlsx")
+
+# Midpoint for plotting
+df <- df %>%
+  mutate(Midpoint = (Cluster_Start + Cluster_End) / 2)
+
+# Define thresholds
+label_threshold <- 20
+highlight_threshold <- 20
+
+df <- df %>%
+  mutate(Hotspot = Num_node_events > highlight_threshold,
+         Label = ifelse(Num_node_events > label_threshold & gene_label != "", gene_label, NA))
+
+ggplot(df, aes(x = Cluster_Start, xend = Cluster_End, 
+               y = Num_node_events, yend = Num_node_events)) +
+  # cluster intervals
+  geom_segment(color = "steelblue", size = 1.2) +
+  # midpoint points
+  geom_point(aes(x = Midpoint, y = Num_node_events, color = Hotspot), size = 0.6) +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+  # labels only if above threshold
+  geom_text(
+    data = subset(df, !is.na(Label)),
+    aes(x = Midpoint, y = Num_node_events, label = Label),
+    vjust = -0.8, size = 3.5, color = "red"
+  ) +
+  # add vertical lines for genes
+  geom_vline(xintercept = c(254413, 254748), linetype = "solid", color = "darkgreen", size = 0.5) +
+  geom_vline(xintercept = c(15883, 17218), linetype = "solid", color = "purple", size = 0.5) +
+  geom_vline(xintercept = c(858328, 861264), linetype = "solid", color = "yellow", size = 0.5) + geom_vline(xintercept = c(834383, 837319), linetype = "solid", color = "yellow", size = 0.5)+
+  # add gene labels
+  annotate("text", x = mean(c(858328, 861264)), y = max(df$Num_node_events) + 5, 
+           label = "23S", color = "black", angle = 90, vjust = -0.5, size = 4) + 
+  annotate("text", x = mean(c(880383, 883319)), y = max(df$Num_node_events) + 5, 
+           label = "23S", color = "black", angle = 90, vjust = -0.5, size = 4) +
+  annotate("text", x = mean(c(295657, 295992)), y = max(df$Num_node_events) + 5, 
+           label = "rplV", color = "darkgreen", angle = 90, vjust = -0.5, size = 4) +
+  annotate("text", x = mean(c(5071, 5739)), y = max(df$Num_node_events) + 5, 
+           label = "rplD", color = "purple", angle = 90, vjust = -0.5, size = 4) +
+  theme_minimal() +
+  labs(x = "Genome position (bp)",
+       y = "Number of recombination events",
+       #title = "Recombination hotspots across CT genome"
+       ) +
+  theme(legend.position = "none")
+
+```
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
