@@ -1,0 +1,9 @@
+#####Recombination  analysis was performed using ClomalFrameML with default parameters 
+##run clonalframe with the following command
+ClonalFrameML ../core_alignment.fasta.varsites.phy.treefile cleaned.fasta CF__alignment
+
+##### To identify regions of high recombination events, sequence alignemnt was divided into 1000bp transcripts and 
+##### frequency of recombination events were recorded per transcripts.
+##### Transctips with high activity were classified as recombination hotspots
+######Now run this file to get recomb hotspots! 
+python cluster_importation_events.py
