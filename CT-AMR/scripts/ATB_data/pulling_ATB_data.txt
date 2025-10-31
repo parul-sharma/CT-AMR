@@ -1,0 +1,9 @@
+#commands to extract CT assemblies from ATB file list
+awk -F'\t' '$2 == "Chlamydia trachomatis" {print "wget -O "$5" "$6}' file_list.all.latest.tsv > CT_atb_assemblies.txt
+
+##Download each entry 
+while IFS= read -r line; do
+    echo "Running: $line"
+    eval "$line"
+done < CT_atb_assemblies.txt
+
